@@ -10,7 +10,6 @@ import sys
 import requests
 import json
 
-from typing import Generator
 from urllib.parse import quote
 
 
