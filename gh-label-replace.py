@@ -82,11 +82,13 @@ class Github:
         data = {'labels': labels}
 
         if not self.dry_run:
-            response = requests.patch(url, headers=self.headers, data=json.dumps(data))
+            response = requests.patch(url,
+                                      headers=self.headers,
+                                      data=json.dumps(data))
             response.raise_for_status()
 
         print(f'Updated #{pr["number"]} replacing', existing_labels, 'with',
-            labels)
+              labels)
 
 
 # Get GitHub token from env variable
@@ -125,7 +127,7 @@ args = parser.parse_args()
 repo = args.repo
 
 gh = Github(token, args.owner, args.repo, args.old_labels, args.new_labels,
-                args.start_date, args.overwrite, args.dry_run)
+            args.start_date, args.overwrite, args.dry_run)
 
 # Iterate through pages of pull requests
 try:
