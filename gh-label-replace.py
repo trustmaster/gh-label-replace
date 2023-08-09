@@ -10,7 +10,6 @@ import sys
 import requests
 import json
 
-from dataclasses import dataclass
 from typing import Generator
 from urllib.parse import quote
 
@@ -21,15 +20,6 @@ def urlsafe(labels: list[str]) -> str:
 
 class Github:
     """GitHub updater"""
-
-    headers: dict
-    owner: str
-    repo: str
-    old_labels: list[str]
-    new_labels: list[str]
-    start_date: str
-    overwrite: bool
-    dry_run: bool
 
     def __init__(self,
                  token: str,
