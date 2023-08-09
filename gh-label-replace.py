@@ -15,9 +15,14 @@ from typing import Generator
 from urllib.parse import quote
 
 
-@dataclass
-class Params:
-    """Struct to pass parameters to functions"""
+def urlsafe(labels: list[str]) -> str:
+    return quote(','.join(labels))
+
+
+class Github:
+    """GitHub updater"""
+
+    headers: dict
     owner: str
     repo: str
     old_labels: list[str]
@@ -27,6 +32,7 @@ class Params:
     dry_run: bool
 
     def __init__(self,
+                 token: str,
                  owner: str,
                  repo: str,
                  old_labels: str,
@@ -34,6 +40,11 @@ class Params:
                  start_date: str = '',
                  overwrite: bool = False,
                  dry_run: bool = False):
+        self.headers = {
+            'Accept': 'application/vnd.github+json',
+            'Authorization': f'Bearer {token}',
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
         self.owner = owner
         self.repo = repo
         self.old_labels = [l.strip() for l in old_labels.split(',')]
@@ -42,46 +53,40 @@ class Params:
         self.overwrite = overwrite
         self.dry_run = dry_run
 
+    def get_issues(self, page: int = 1) -> list[dict]:
+        """Gets a list of issues from GitHub API as a list of dict objects or returns an empty list"""
 
-def urlsafe(labels: list[str]) -> str:
-    return quote(','.join(labels))
+        labels = urlsafe(self.old_labels)
+        url = f'https://api.github.com/repos/{self.owner}/{self.repo}/issues?state=all&labels={labels}&per_page=100&page={page}'
 
+        if self.start_date != None and self.start_date != '':
+            url += f'&since={self.start_date}'
 
-def get_pull_requests(headers: dict, p: Params, page: int = 1) -> list[dict]:
-    """Gets a list of issues from GitHub API as a list of dict objects or returns an empty list"""
-
-    labels = urlsafe(p.old_labels)
-    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/issues?state=all&labels={labels}&per_page=100&page={page}'
-
-    if p.start_date != None and p.start_date != '':
-        url += f'&since={p.start_date}'
-
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-
-    json = response.json()
-    return [pr for pr in json]
-
-
-def update_pull_request(headers: dict, p: Params, pr: dict):
-    """Updates an issue with new labels"""
-
-    labels = p.new_labels
-    existing_labels = [l['name'] for l in pr['labels']]
-    if not p.overwrite:
-        # Remove old labels from existing labels
-        labels = [l for l in existing_labels if l not in p.old_labels]
-        labels += p.new_labels
-
-    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/issues/{pr["number"]}'
-    data = {'labels': labels}
-
-    if not p.dry_run:
-        response = requests.patch(url, headers=headers, data=json.dumps(data))
+        response = requests.get(url, headers=self.headers)
         response.raise_for_status()
 
-    print(f'Updated #{pr["number"]} replacing', existing_labels, 'with',
-          labels)
+        json = response.json()
+        return [pr for pr in json]
+
+    def update_issue(self, pr: dict):
+        """Updates an issue with new labels"""
+
+        labels = self.new_labels
+        existing_labels = [l['name'] for l in pr['labels']]
+        if not self.overwrite:
+            # Remove old labels from existing labels
+            labels = [l for l in existing_labels if l not in self.old_labels]
+            labels += self.new_labels
+
+        url = f'https://api.github.com/repos/{self.owner}/{self.repo}/issues/{pr["number"]}'
+        data = {'labels': labels}
+
+        if not self.dry_run:
+            response = requests.patch(url, headers=self.headers, data=json.dumps(data))
+            response.raise_for_status()
+
+        print(f'Updated #{pr["number"]} replacing', existing_labels, 'with',
+            labels)
 
 
 # Get GitHub token from env variable
@@ -90,12 +95,6 @@ if not token:
     exit(
         'Error: please set GH_TOKEN env variable with a GitHub personal access token with repo permissions'
     )
-
-headers = {
-    'Accept': 'application/vnd.github+json',
-    'Authorization': f'Bearer {token}',
-    'X-GitHub-Api-Version': '2022-11-28'
-}
 
 parser = argparse.ArgumentParser(
     description=
@@ -124,19 +123,20 @@ parser.add_argument('-d',
 args = parser.parse_args()
 
 repo = args.repo
-params = Params(args.owner, args.repo, args.old_labels, args.new_labels,
+
+gh = Github(token, args.owner, args.repo, args.old_labels, args.new_labels,
                 args.start_date, args.overwrite, args.dry_run)
 
 # Iterate through pages of pull requests
 try:
     page = 1
     while True:
-        prs = get_pull_requests(headers, params, page)
+        prs = gh.get_issues(page)
         if len(prs) == 0:
             break
 
         for pr in prs:
-            update_pull_request(headers, params, pr)
+            gh.update_issue(pr)
 
         page += 1
 except requests.exceptions.HTTPError as e:
