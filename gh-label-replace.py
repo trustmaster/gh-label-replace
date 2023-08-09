@@ -12,6 +12,7 @@ import json
 
 from dataclasses import dataclass
 from typing import Generator
+from urllib.parse import quote
 
 
 @dataclass
@@ -19,23 +20,41 @@ class Params:
     """Struct to pass parameters to functions"""
     owner: str
     repo: str
-    old_labels: str
-    new_labels: str
+    old_labels: list[str]
+    new_labels: list[str]
     start_date: str
+    overwrite: bool
+    dry_run: bool
 
-    def __init__(self, owner: str, repo: str, old_labels: str, new_labels: str,
-                 start_date: str):
+    def __init__(self,
+                 owner: str,
+                 repo: str,
+                 old_labels: str,
+                 new_labels: str,
+                 start_date: str = '',
+                 overwrite: bool = False,
+                 dry_run: bool = False):
         self.owner = owner
         self.repo = repo
-        self.old_labels = old_labels
-        self.new_labels = new_labels
+        self.old_labels = [l.strip() for l in old_labels.split(',')]
+        self.new_labels = [l.strip() for l in new_labels.split(',')]
         self.start_date = start_date
+        self.overwrite = overwrite
+        self.dry_run = dry_run
+
+
+def urlsafe(labels: list[str]) -> str:
+    return quote(','.join(labels))
 
 
 def get_pull_requests(headers: dict, p: Params, page: int = 1) -> list[dict]:
-    """Gets a list of pull requests from GitHub API as a list of dict objects or returns an empty list"""
+    """Gets a list of issues from GitHub API as a list of dict objects or returns an empty list"""
 
-    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/pulls?state=all&labels={p.old_labels}&since={p.start_date}&per_page=100&page={page}'
+    labels = urlsafe(p.old_labels)
+    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/issues?state=all&labels={labels}&per_page=100&page={page}'
+
+    if p.start_date != None and p.start_date != '':
+        url += f'&since={p.start_date}'
 
     response = requests.get(url, headers=headers)
     response.raise_for_status()
@@ -44,14 +63,25 @@ def get_pull_requests(headers: dict, p: Params, page: int = 1) -> list[dict]:
     return [pr for pr in json]
 
 
-def update_pull_request(headers: dict, p: Params, number: int):
-    """Updates a pull request with new labels"""
+def update_pull_request(headers: dict, p: Params, pr: dict):
+    """Updates an issue with new labels"""
 
-    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/pulls/{number}'
-    data = {'labels': p.new_labels.split(',')}
+    labels = p.new_labels
+    existing_labels = [l['name'] for l in pr['labels']]
+    if not p.overwrite:
+        # Remove old labels from existing labels
+        labels = [l for l in existing_labels if l not in p.old_labels]
+        labels += p.new_labels
 
-    response = requests.patch(url, headers=headers, data=json.dumps(data))
-    response.raise_for_status()
+    url = f'https://api.github.com/repos/{p.owner}/{p.repo}/issues/{pr["number"]}'
+    data = {'labels': labels}
+
+    if not p.dry_run:
+        response = requests.patch(url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+
+    print(f'Updated #{pr["number"]} replacing', existing_labels, 'with',
+          labels)
 
 
 # Get GitHub token from env variable
@@ -69,7 +99,7 @@ headers = {
 
 parser = argparse.ArgumentParser(
     description=
-    'Replaces labels on GitHub pull requests in a repo that have a given label.'
+    'Replaces labels on GitHub issues and pull requests in a repo with other labels. By default only the provided labels are changed, other labels remain untouched.'
 )
 parser.add_argument('owner', type=str, help='GitHub repo owner')
 parser.add_argument('repo', type=str, help='GitHub repo in format owner/repo')
@@ -79,15 +109,23 @@ parser.add_argument('old_labels',
 parser.add_argument('new_labels',
                     type=str,
                     help='New labels to replace with, separated by commas')
-parser.add_argument('-d',
+parser.add_argument('-s',
                     '--start-date',
                     type=str,
                     help='Start date to filter pull requests by')
+parser.add_argument('-o',
+                    '--overwrite',
+                    action='store_true',
+                    help='Overwrite all existing labels')
+parser.add_argument('-d',
+                    '--dry-run',
+                    action='store_true',
+                    help='Dry run, don\'t update any issues')
 args = parser.parse_args()
 
 repo = args.repo
 params = Params(args.owner, args.repo, args.old_labels, args.new_labels,
-                args.start_date)
+                args.start_date, args.overwrite, args.dry_run)
 
 # Iterate through pages of pull requests
 try:
@@ -98,8 +136,7 @@ try:
             break
 
         for pr in prs:
-            update_pull_request(headers, params, pr['number'])
-            print(f'Updated PR #{pr["number"]} in {repo}')
+            update_pull_request(headers, params, pr)
 
         page += 1
 except requests.exceptions.HTTPError as e:
